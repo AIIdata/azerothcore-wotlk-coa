@@ -398,6 +398,7 @@ constexpr uint32 APPEARANCE_CATEGORY_AMMUNITION = 32;
 constexpr uint32 APPEARANCE_CATEGORY_SHADOWHOUND = 68;
 constexpr uint32 APPEARANCE_CATEGORY_NECROMANCER_LICH_FORM = 67;
 constexpr uint32 APPEARANCE_CATEGORY_TAMED_BEAST = 33;
+constexpr uint32 APPEARANCE_CATEGORY_SUMMONED_DEMON = 34;
 constexpr uint32 TAME_BEAST_SPELL = 1515;
 constexpr std::array<uint32, 3> CALL_PET_SPELLS = { 883, 574302, 1100883 };
 
@@ -5613,6 +5614,12 @@ public:
         return model && sCreatureDisplayInfoStore.LookupEntry(model->DisplayId) ? model->DisplayId : 0;
     }
 
+    static uint32 ResolveSummonedDemonDisplay(uint32 creatureId)
+    {
+        auto const* model = FindCollectionModel(creatureId);
+        return model && sCreatureDisplayInfoStore.LookupEntry(model->DisplayId) ? model->DisplayId : 0;
+    }
+
   static AscensionCollectionService &Instance() {
     static AscensionCollectionService instance;
     return instance;
@@ -5670,6 +5677,11 @@ public:
         appearance.CreatureDisplay = ResolveShadowhoundDisplay(displayId);
       if (appearance.PrimaryCategory == APPEARANCE_CATEGORY_TAMED_BEAST)
         appearance.CreatureEntry = record.GetUInt32(8);
+      if (appearance.PrimaryCategory == APPEARANCE_CATEGORY_SUMMONED_DEMON)
+      {
+        appearance.CreatureEntry = record.GetUInt32(8);
+        appearance.CreatureDisplay = ResolveSummonedDemonDisplay(appearance.CreatureEntry);
+      }
       if (_incarnationCategories.contains(appearance.PrimaryCategory) ||
           _incarnationCategories.contains(appearance.SecondaryCategory) ||
           _incarnationCategories.contains(appearance.TertiaryCategory))
@@ -6401,6 +6413,23 @@ public:
         return appearance != _appearances.end() ? appearance->second.CreatureDisplay : 0;
     }
 
+    uint32 GetSummonedDemonDisplay(Player* player)
+    {
+        if (!player || (player->getClass() != CLASS_WARLOCK && player->getClass() != CLASS_HERO))
+            return 0;
+
+        auto state = GetState(player);
+        if (!state || !state->CanSeeSpellAppearances)
+            return 0;
+
+        uint32 const appearanceId = state->ActiveAppearances[APPEARANCE_CATEGORY_SUMMONED_DEMON];
+        if (!state->CollectedAppearances.contains(appearanceId))
+            return 0;
+
+        auto const appearance = _appearances.find(appearanceId);
+        return appearance != _appearances.end() ? appearance->second.CreatureDisplay : 0;
+    }
+
     uint32 FindIncarnationCategory(uint32 kind, uint32 id) const
     {
         for (auto const& [category, incarnation] : _incarnationCategories)
@@ -6497,6 +6526,27 @@ public:
             guardian->SetVirtualItem(0, weapon);
     }
 
+    void RefreshSummonedDemonGuardian(Player* player, Guardian* guardian)
+    {
+        if (!player || !guardian || guardian->GetOwnerGUID() != player->GetGUID() || guardian->getTransForm())
+            return;
+        if (player->getClass() != CLASS_WARLOCK && player->getClass() != CLASS_HERO)
+            return;
+
+        uint32 const incarnationCategory = FindIncarnationCategory(INCARNATION_KIND_CREATURE, guardian->GetEntry());
+        if (incarnationCategory && GetActiveIncarnation(player, incarnationCategory))
+            return;
+
+        Pet* pet = guardian->ToPet();
+        if (!pet || pet->getPetType() != SUMMON_PET)
+            return;
+
+        uint32 const display = GetSummonedDemonDisplay(player);
+        uint32 const target = display ? display : guardian->GetNativeDisplayId();
+        if (guardian->GetDisplayId() != target)
+            guardian->SetDisplayId(target, guardian->GetObjectScale());
+    }
+
     void RefreshIncarnations(Player* player)
     {
         if (!player || !player->IsInWorld())
@@ -6505,7 +6555,10 @@ public:
         if (player->GetShapeshiftForm() != FORM_NONE)
             player->RestoreDisplayId();
         if (Pet* pet = player->GetPet())
+        {
             RefreshIncarnationGuardian(player, pet);
+            RefreshSummonedDemonGuardian(player, pet);
+        }
         RefreshIncarnationSpell(player);
     }
 
@@ -7298,6 +7351,7 @@ private:
       AppearanceInfo const &appearance = appearanceItr->second;
       if ((categoryId <= 14 || categoryId == APPEARANCE_CATEGORY_AMMUNITION ||
           categoryId == APPEARANCE_CATEGORY_SHADOWHOUND ||
+          categoryId == APPEARANCE_CATEGORY_SUMMONED_DEMON ||
           IsCosmeticCategory(categoryId) || _incarnationCategories.contains(categoryId)) &&
           appearance.PrimaryCategory != categoryId &&
           appearance.SecondaryCategory != categoryId &&
@@ -7307,6 +7361,7 @@ private:
       }
       if ((IsCosmeticCategory(categoryId) && !appearance.CosmeticSpell) ||
           (categoryId == APPEARANCE_CATEGORY_SHADOWHOUND && !appearance.CreatureDisplay) ||
+          (categoryId == APPEARANCE_CATEGORY_SUMMONED_DEMON && !appearance.CreatureDisplay) ||
           (_incarnationCategories.contains(categoryId) && !appearance.CreatureDisplay &&
            !appearance.IncarnationSpell))
       {
@@ -7315,6 +7370,12 @@ private:
       }
       if (auto const incarnation = _incarnationCategories.find(categoryId);
           incarnation != _incarnationCategories.end() && !incarnation->second.AllowsClass(player->getClass()))
+      {
+        SendApplyResult(player, "APPLY_APPEARANCES_NOT_AVAILABLE_FOR_CLASS");
+        return;
+      }
+      if (categoryId == APPEARANCE_CATEGORY_SUMMONED_DEMON &&
+          player->getClass() != CLASS_WARLOCK && player->getClass() != CLASS_HERO)
       {
         SendApplyResult(player, "APPLY_APPEARANCES_NOT_AVAILABLE_FOR_CLASS");
         return;
@@ -8920,6 +8981,7 @@ public:
     void OnPlayerAfterGuardianInitStatsForLevel(Player* player, Guardian* guardian) override
     {
         AscensionCollectionService::Instance().RefreshIncarnationGuardian(player, guardian);
+        AscensionCollectionService::Instance().RefreshSummonedDemonGuardian(player, guardian);
     }
 
     void OnPlayerTemporarySpellRemoveNotice(Player* player, uint32 spellId, bool sent) override
