@@ -5833,6 +5833,8 @@ private:
                 movementFlag = MOVEMENTFLAG_STRAFE_LEFT;
             else if (direction == "strafe_right")
                 movementFlag = MOVEMENTFLAG_STRAFE_RIGHT;
+            else if (direction == "falling")
+                movementFlag = MOVEMENTFLAG_FALLING;
             else
                 Require(direction == "forward", "Unknown movement flag: " + direction);
             if (step.get<bool>("enabled"))
